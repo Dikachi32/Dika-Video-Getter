@@ -1,0 +1,1 @@
+"""DikachiVideo AI Studio backend application."""
