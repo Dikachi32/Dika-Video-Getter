@@ -1,4 +1,4 @@
-"""API client for DikachiVideo AI Studio backend."""
+// API client for DikachiVideo AI Studio backend
 
 const API_BASE = "/api";
 

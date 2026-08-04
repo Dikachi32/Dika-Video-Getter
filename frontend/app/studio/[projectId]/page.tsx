@@ -1,28 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
-import { 
-  Play, Mic, Music, Type, 
-  Image, Download, Wand2, FileText, Layers, Merge
+import {
+  ArrowLeft,
+  Loader2,
+  AlertCircle,
+  Combine,
+  Download,
+  Menu,
+  X,
 } from "lucide-react";
+import Link from "next/link";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
+import { PromptInput } from "@/components/studio/PromptInput";
+import { SceneEditor } from "@/components/studio/SceneEditor";
+import { PreviewWindow } from "@/components/studio/PreviewWindow";
+import { VoicePanel } from "@/components/studio/VoicePanel";
+import { MusicPanel } from "@/components/studio/MusicPanel";
+import { SubtitlePanel } from "@/components/studio/SubtitlePanel";
+import { ThumbnailPanel } from "@/components/studio/ThumbnailPanel";
+import { VideoPanel } from "@/components/studio/VideoPanel";
+import { WorkflowTimeline } from "@/components/studio/WorkflowTimeline";
+import { SkeletonScene } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import { Project, Scene, WorkflowStep } from "@/types";
-
-const workflowSteps: { id: WorkflowStep; label: string; icon: any }[] = [
-  { id: "prompt", label: "Prompt", icon: FileText },
-  { id: "script", label: "Script", icon: FileText },
-  { id: "scenes", label: "Scenes", icon: Layers },
-  { id: "video", label: "Video", icon: Play },
-  { id: "voice", label: "Voice", icon: Mic },
-  { id: "subtitle", label: "Subtitle", icon: Type },
-  { id: "music", label: "Music", icon: Music },
-  { id: "thumbnail", label: "Thumbnail", icon: Image },
-  { id: "merge", label: "Merge", icon: Merge },
-  { id: "export", label: "Export", icon: Download },
-];
+import { Project, Scene, WorkflowState, WorkflowStep } from "@/types";
+import { toast } from "@/components/ui/Toast";
+import { cn } from "@/lib/utils";
 
 export default function StudioPage() {
   const params = useParams();
@@ -30,238 +36,359 @@ export default function StudioPage() {
 
   const [project, setProject] = useState<Project | null>(null);
   const [scenes, setScenes] = useState<Scene[]>([]);
-  const [activeTab, setActiveTab] = useState<WorkflowStep>("prompt");
-  const [processing, setProcessing] = useState(false);
-  const [generatedScript, setGeneratedScript] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [workflow, setWorkflow] = useState<WorkflowState>({
+    currentStep: "prompt",
+    completedSteps: [],
+    isProcessing: false,
+    error: null,
+  });
 
-  useEffect(() => {
-    loadProject();
-  }, [projectId]);
+  const [voicePath, setVoicePath] = useState<string | null>(null);
+  const [musicPath, setMusicPath] = useState<string | null>(null);
+  const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
+  const [thumbnailPath, setThumbnailPath] = useState<string | null>(null);
+  const [assembling, setAssembling] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
-  const loadProject = async () => {
+  const fetchProject = useCallback(async () => {
     try {
       const p = await api.projects.get(projectId);
       setProject(p);
-      setGeneratedScript(p.script || "");
+      updateWorkflowFromStatus(p.status);
+      if (p.output_video_path) setVoicePath(p.output_video_path);
+    } catch (err: any) {
+      setError(err.message || "Failed to load project");
+    }
+  }, [projectId]);
+
+  const fetchScenes = useCallback(async () => {
+    try {
       const s = await api.projects.getScenes(projectId);
       setScenes(s);
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error("Failed to load scenes:", err);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    async function init() {
+      setLoading(true);
+      setError(null);
+      try {
+        await Promise.all([fetchProject(), fetchScenes()]);
+      } finally {
+        setLoading(false);
+      }
+    }
+    init();
+  }, [fetchProject, fetchScenes]);
+
+  const updateWorkflowFromStatus = (status: string) => {
+    const stepMap: Record<string, WorkflowStep> = {
+      draft: "prompt",
+      script_generated: "script",
+      scenes_generated: "scenes",
+      video_generated: "video",
+      voice_generated: "voice",
+      subtitle_generated: "subtitle",
+      music_generated: "music",
+      thumbnail_generated: "thumbnail",
+      merged: "merge",
+      exported: "export",
+    };
+
+    const current = stepMap[status] || "prompt";
+    const allSteps: WorkflowStep[] = [
+      "prompt", "script", "scenes", "video", "voice",
+      "subtitle", "music", "thumbnail", "merge", "export",
+    ];
+    const completedIndex = allSteps.indexOf(current);
+    const completed = completedIndex > 0 ? allSteps.slice(0, completedIndex) : [];
+
+    setWorkflow({
+      currentStep: current,
+      completedSteps: completed,
+      isProcessing: false,
+      error: null,
+    });
+  };
+
+  const handleScriptGenerated = async (script: string) => {
+    setWorkflow((w) => ({
+      ...w,
+      currentStep: "script",
+      completedSteps: [...w.completedSteps, "prompt"],
+    }));
+    try {
+      await api.projects.update(projectId, { script });
+      await api.video.generateScenes(projectId, script);
+      await fetchScenes();
+      setWorkflow((w) => ({
+        ...w,
+        currentStep: "scenes",
+        completedSteps: [...w.completedSteps, "script"],
+      }));
+      await fetchProject();
+      toast.success("Script & scenes generated", "Your video structure is ready.");
+    } catch (err: any) {
+      setWorkflow((w) => ({ ...w, error: err.message }));
+      toast.error("Generation failed", err.message);
     }
   };
 
-  const generateScript = async () => {
-    if (!project?.prompt) return;
-    setProcessing(true);
-    try {
-      const res = await api.video.generateScript(projectId, project.prompt);
-      setGeneratedScript(res.script);
-      await loadProject();
-    } catch (e) {
-      alert("Failed to generate script");
-    } finally {
-      setProcessing(false);
-    }
+  const handleScenesChange = (newScenes: Scene[]) => {
+    setScenes(newScenes);
   };
 
-  const generateScenes = async () => {
-    if (!generatedScript) return;
-    setProcessing(true);
-    try {
-      await api.video.generateScenes(projectId, generatedScript);
-      await loadProject();
-    } catch (e) {
-      alert("Failed to generate scenes");
-    } finally {
-      setProcessing(false);
-    }
+  const handleSceneUpdate = (updatedScene: Scene) => {
+    setScenes((prev) =>
+      prev.map((s) => (s.id === updatedScene.id ? updatedScene : s))
+    );
   };
 
-  const generateVoice = async () => {
-    setProcessing(true);
-    try {
-      const text = scenes.map(s => s.script_text).filter(Boolean).join(" ");
-      await api.voice.generate(projectId, text, project?.voice_id || "alloy");
-      await loadProject();
-    } catch (e) {
-      alert("Failed to generate voice");
-    } finally {
-      setProcessing(false);
+  const handleAssemble = async () => {
+    const sceneVideos = scenes
+      .map((s) => s.video_path)
+      .filter(Boolean) as string[];
+    if (sceneVideos.length === 0) {
+      toast.warning("No videos", "Generate scene videos before assembling.");
+      return;
     }
-  };
 
-  const assembleAndExport = async () => {
-    setProcessing(true);
+    setAssembling(true);
+    setWorkflow((w) => ({ ...w, isProcessing: true, error: null }));
+
     try {
-      const sceneVideos = scenes.map(s => s.video_path).filter(Boolean) as string[];
       await api.video.assemble({
         project_id: projectId,
         scene_video_paths: sceneVideos,
+        voice_path: voicePath || undefined,
+        music_path: musicPath || undefined,
+        subtitle_path: subtitlePath || undefined,
         subtitle_style: project?.subtitle_style || "modern-yellow",
       });
-      await api.video.export(projectId, "high");
-      await loadProject();
-      alert("Video exported successfully!");
-    } catch (e) {
-      alert("Export failed");
+
+      setWorkflow((w) => ({
+        ...w,
+        currentStep: "merge",
+        completedSteps: [
+          ...w.completedSteps,
+          "video",
+          "voice",
+          "subtitle",
+          "music",
+          "thumbnail",
+        ],
+        isProcessing: false,
+      }));
+      await fetchProject();
+      toast.success("Video assembled", "Your final video is ready for export.");
+    } catch (err: any) {
+      setWorkflow((w) => ({ ...w, error: err.message, isProcessing: false }));
+      toast.error("Assembly failed", err.message);
     } finally {
-      setProcessing(false);
+      setAssembling(false);
     }
   };
 
-  if (!project) {
+  const handleExport = async () => {
+    setExporting(true);
+    setWorkflow((w) => ({ ...w, isProcessing: true, error: null }));
+
+    try {
+      await api.video.export(projectId, "high");
+      setWorkflow((w) => ({
+        ...w,
+        currentStep: "export",
+        completedSteps: [...w.completedSteps, "merge"],
+        isProcessing: false,
+      }));
+      await fetchProject();
+      toast.success("Export complete", "Your MP4 has been saved.");
+    } catch (err: any) {
+      setWorkflow((w) => ({ ...w, error: err.message, isProcessing: false }));
+      toast.error("Export failed", err.message);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
+      <div className="flex h-screen bg-background">
+        <div className="hidden lg:block">
+          <Sidebar />
+        </div>
+        <div className="flex-1 lg:ml-64 flex flex-col min-w-0">
+          <Header />
+          <main className="flex-1 flex items-center justify-center p-4">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              <span className="text-sm text-muted-foreground">Loading studio...</span>
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !project) {
+    return (
+      <div className="flex h-screen bg-background">
+        <div className="hidden lg:block">
+          <Sidebar />
+        </div>
+        <div className="flex-1 lg:ml-64 flex flex-col min-w-0">
+          <Header />
+          <main className="flex-1 flex items-center justify-center p-8">
+            <div className="panel text-center max-w-md">
+              <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+              <h2 className="text-xl font-bold mb-2">Project Not Found</h2>
+              <p className="text-muted-foreground mb-6">
+                {error || "This project does not exist."}
+              </p>
+              <Link href="/dashboard">
+                <Button leftIcon={<ArrowLeft className="w-4 h-4" />}>
+                  Back to Dashboard
+                </Button>
+              </Link>
+            </div>
+          </main>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar />
-      <div className="flex-1 ml-64 flex flex-col">
-        <Header />
-        <main className="flex-1 flex overflow-hidden">
-          <div className="w-64 border-r border-border bg-card/30 p-4 overflow-y-auto">
-            <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-4">
-              Workflow
-            </h3>
-            <div className="space-y-1">
-              {workflowSteps.map((step, idx) => {
-                const Icon = step.icon;
-                const isActive = activeTab === step.id;
-                const isCompleted = false; // Simplified for now
+      {/* Desktop Sidebar */}
+      <div className="hidden lg:block">
+        <Sidebar />
+      </div>
 
-                return (
-                  <button
-                    key={step.id}
-                    onClick={() => setActiveTab(step.id)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
-                      isActive 
-                        ? "bg-primary/10 text-primary border border-primary/20" 
-                        : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                      isCompleted ? "bg-success text-black" : "bg-secondary"
-                    }`}>
-                      {isCompleted ? "✓" : idx + 1}
-                    </div>
-                    <Icon className="w-4 h-4" />
-                    {step.label}
-                  </button>
-                );
-              })}
-            </div>
+      {/* Mobile Sidebar Overlay */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          <div className="absolute left-0 top-0 h-full w-64">
+            <Sidebar />
           </div>
+        </div>
+      )}
 
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="h-96 bg-black border-b border-border flex items-center justify-center relative">
-              {project.output_video_path ? (
-                <video 
-                  src={`/outputs/${projectId}/export_high.mp4`} 
-                  controls 
-                  className="max-h-full max-w-full"
-                />
-              ) : (
-                <div className="text-center">
-                  <Play className="w-16 h-16 text-muted mx-auto mb-4" />
-                  <p className="text-muted-foreground">Preview will appear here</p>
-                </div>
-              )}
-              {processing && (
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="animate-spin w-10 h-10 border-2 border-primary border-t-transparent rounded-full mx-auto mb-3" />
-                    <p className="text-sm font-medium">Processing...</p>
-                  </div>
-                </div>
-              )}
+      <div className="flex-1 lg:ml-64 flex flex-col min-w-0">
+        <Header />
+        <main className="flex-1 p-4 lg:p-6 overflow-auto">
+          <div className="max-w-7xl mx-auto">
+            {/* Breadcrumb & Mobile Toggle */}
+            <div className="flex items-center gap-2 mb-6">
+              <button
+                onClick={() => setMobileMenuOpen(true)}
+                className="lg:hidden p-2 rounded-lg hover:bg-secondary transition-colors"
+              >
+                <Menu className="w-4 h-4" />
+              </button>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Link
+                  href="/"
+                  className="hover:text-foreground transition-colors"
+                >
+                  Dashboard
+                </Link>
+                <span>/</span>
+                <span className="text-foreground font-medium truncate max-w-[200px] lg:max-w-xs">
+                  {project.name}
+                </span>
+              </div>
             </div>
 
-            <div className="flex-1 p-6 overflow-y-auto">
-              {activeTab === "prompt" && (
-                <div className="max-w-2xl">
-                  <h3 className="text-lg font-semibold mb-4">Video Prompt</h3>
-                  <textarea
-                    value={project.prompt || ""}
-                    readOnly
-                    className="input-field h-40 resize-none mb-4"
-                    placeholder="Describe your video..."
-                  />
-                  <button onClick={generateScript} className="btn-primary flex items-center gap-2">
-                    <Wand2 className="w-4 h-4" />
-                    Generate Script
-                  </button>
-                </div>
-              )}
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 lg:gap-6">
+              {/* Left Column - Workflow */}
+              <div className="xl:col-span-3 space-y-4 lg:space-y-6">
+                <WorkflowTimeline state={workflow} />
+              </div>
 
-              {activeTab === "script" && (
-                <div className="max-w-2xl">
-                  <h3 className="text-lg font-semibold mb-4">Generated Script</h3>
-                  <textarea
-                    value={generatedScript}
-                    onChange={(e) => setGeneratedScript(e.target.value)}
-                    className="input-field h-64 resize-none font-mono text-sm mb-4"
-                  />
-                  <button onClick={generateScenes} className="btn-primary flex items-center gap-2">
-                    <Layers className="w-4 h-4" />
-                    Generate Scenes
-                  </button>
-                </div>
-              )}
+              {/* Center Column - Main Workspace */}
+              <div className="xl:col-span-6 space-y-4 lg:space-y-6">
+                <PromptInput
+                  projectId={projectId}
+                  existingPrompt={project.prompt}
+                  existingScript={project.script}
+                  onScriptGenerated={handleScriptGenerated}
+                />
 
-              {activeTab === "scenes" && (
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Scenes</h3>
-                  <div className="space-y-3">
-                    {scenes.map((scene, idx) => (
-                      <div key={scene.id} className="panel p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                          <span className="w-6 h-6 rounded bg-primary/20 text-primary flex items-center justify-center text-xs font-bold">
-                            {idx + 1}
-                          </span>
-                          <span className="font-medium">{scene.description}</span>
-                        </div>
-                        <p className="text-sm text-muted-foreground ml-9">{scene.script_text}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                <VideoPanel
+                  projectId={projectId}
+                  scenes={scenes}
+                  onSceneUpdate={handleSceneUpdate}
+                />
 
-              {activeTab === "voice" && (
-                <div className="max-w-2xl">
-                  <h3 className="text-lg font-semibold mb-4">AI Voice</h3>
-                  <button onClick={generateVoice} className="btn-primary flex items-center gap-2">
-                    <Mic className="w-4 h-4" />
-                    Generate Voiceover
-                  </button>
-                </div>
-              )}
+                <SceneEditor
+                  projectId={projectId}
+                  scenes={scenes}
+                  onScenesChange={handleScenesChange}
+                />
 
-              {activeTab === "export" && (
-                <div className="max-w-2xl">
-                  <h3 className="text-lg font-semibold mb-4">Export Video</h3>
-                  <button onClick={assembleAndExport} className="btn-primary flex items-center gap-2">
-                    <Download className="w-4 h-4" />
-                    Assemble & Export MP4
-                  </button>
-                  {project.output_video_path && (
-                    <div className="mt-4 p-4 bg-success/10 border border-success/20 rounded-lg">
-                      <p className="text-sm text-success font-medium">Video ready!</p>
-                      <p className="text-xs text-muted-foreground mt-1">{project.output_video_path}</p>
-                    </div>
-                  )}
-                </div>
-              )}
+                <PreviewWindow
+                  videoPath={project.output_video_path}
+                  projectName={project.name}
+                />
 
-              {!["prompt", "script", "scenes", "voice", "export"].includes(activeTab) && (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  <p>This step will be implemented in the workflow panel.</p>
+                {/* Assemble & Export Actions */}
+                <div className="panel flex flex-col sm:flex-row items-center gap-3">
+                  <Button
+                    onClick={handleAssemble}
+                    loading={assembling}
+                    disabled={scenes.filter((s) => s.video_path).length === 0}
+                    className="flex-1 w-full sm:w-auto"
+                    leftIcon={<Combine className="w-4 h-4" />}
+                  >
+                    {assembling ? "Assembling..." : "Assemble Video"}
+                  </Button>
+                  <Button
+                    onClick={handleExport}
+                    loading={exporting}
+                    disabled={!project.output_video_path}
+                    variant="secondary"
+                    className="flex-1 w-full sm:w-auto"
+                    leftIcon={<Download className="w-4 h-4" />}
+                  >
+                    {exporting ? "Exporting..." : "Export MP4"}
+                  </Button>
                 </div>
-              )}
+              </div>
+
+              {/* Right Column - Assets */}
+              <div className="xl:col-span-3 space-y-4 lg:space-y-6">
+                <VoicePanel
+                  projectId={projectId}
+                  scriptText={project.script}
+                  voiceId={project.voice_id}
+                  onVoiceGenerated={setVoicePath}
+                />
+                <MusicPanel
+                  projectId={projectId}
+                  duration={project.video_duration}
+                  onMusicGenerated={setMusicPath}
+                />
+                <SubtitlePanel
+                  projectId={projectId}
+                  scriptText={project.script}
+                  duration={project.video_duration}
+                  subtitleStyle={project.subtitle_style}
+                  onSubtitlesGenerated={setSubtitlePath}
+                />
+                <ThumbnailPanel
+                  projectId={projectId}
+                  onThumbnailGenerated={setThumbnailPath}
+                />
+              </div>
             </div>
           </div>
         </main>

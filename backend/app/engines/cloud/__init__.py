@@ -1,4 +1,4 @@
-"""Cloud AI engines using commercial APIs."""
+"""Cloud AI engines."""
 from app.engines.cloud.openai_engine import OpenAIEngine
 from app.engines.cloud.elevenlabs_engine import ElevenLabsEngine
 

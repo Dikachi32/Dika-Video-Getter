@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API_BASE = "http://127.0.0.1:8000";
+const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:8000";
 
+/**
+ * API Proxy Route Handler
+ * Forwards all /api/* requests to the FastAPI backend.
+ * Supports all HTTP methods with proper body forwarding.
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: { path: string[] } }
@@ -30,44 +35,62 @@ export async function DELETE(
   return proxyRequest(request, params.path, "DELETE");
 }
 
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: { path: string[] } }
+) {
+  return proxyRequest(request, params.path, "PATCH");
+}
+
 async function proxyRequest(
   request: NextRequest,
-  path: string[],
+  pathSegments: string[],
   method: string
 ) {
-  const url = new URL(request.url);
-  const targetUrl = `${API_BASE}/${path.join("/")}${url.search}`;
+  const path = pathSegments.join("/");
+  const searchParams = request.nextUrl.search;
+  const url = `${BACKEND_URL}/${path}${searchParams}`;
 
   const headers: Record<string, string> = {};
   request.headers.forEach((value, key) => {
-    if (key !== "host" && key !== "content-length") {
+    if (key.toLowerCase() !== "host" && key.toLowerCase() !== "content-length") {
       headers[key] = value;
     }
   });
 
-  let body: BodyInit | undefined;
+  const options: RequestInit = {
+    method,
+    headers,
+  };
+
   if (method !== "GET" && method !== "HEAD") {
-    body = await request.text();
+    const body = await request.text();
+    if (body) {
+      options.body = body;
+    }
   }
 
   try {
-    const response = await fetch(targetUrl, {
-      method,
-      headers,
-      body,
+    const response = await fetch(url, options);
+    const responseBody = await response.text();
+
+    const responseHeaders = new Headers();
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() !== "content-encoding") {
+        responseHeaders.set(key, value);
+      }
     });
 
-    const responseBody = await response.text();
     return new NextResponse(responseBody, {
       status: response.status,
-      headers: {
-        "Content-Type": response.headers.get("Content-Type") || "application/json",
-      },
+      statusText: response.statusText,
+      headers: responseHeaders,
     });
   } catch (error) {
+    console.error("Proxy error:", error);
     return NextResponse.json(
-      { error: "Backend server is not running" },
-      { status: 503 }
+      { error: "Failed to connect to backend" },
+      { status: 502 }
     );
   }
 }

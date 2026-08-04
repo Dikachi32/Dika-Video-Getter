@@ -1,16 +1,15 @@
-"""Media assets model."""
+"""Media asset model for storing generated files."""
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
+from sqlalchemy.orm import relationship
 from app.database import Base
 from datetime import datetime
 import enum
 
 class MediaType(str, enum.Enum):
     VIDEO = "video"
-    IMAGE = "image"
     AUDIO = "audio"
-    MUSIC = "music"
+    IMAGE = "image"
     SUBTITLE = "subtitle"
-    THUMBNAIL = "thumbnail"
 
 class MediaAsset(Base):
     __tablename__ = "media_assets"
@@ -19,8 +18,8 @@ class MediaAsset(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     type = Column(Enum(MediaType), nullable=False)
     name = Column(String(255), nullable=False)
-    file_path = Column(String(500), nullable=False)
-    metadata_json = Column(Text, nullable=True)
+    path = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project", back_populates="media_assets")

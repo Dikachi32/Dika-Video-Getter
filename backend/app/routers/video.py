@@ -1,13 +1,14 @@
 """Video processing API router."""
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+import os
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 
 from app.database import get_db
-from app.models.project import Project, ProjectStatus
+from app.models.project import Project, ProjectStatus, Scene
 from app.services.video_processor import VideoProcessor
-from app.services.ai_engine_manager import engine_manager, EngineCapability
+from app.services.ai_engine_manager import engine_manager
 from app.utils.file_manager import FileManager
 
 router = APIRouter(prefix="/video", tags=["Video"])
@@ -61,8 +62,6 @@ async def generate_scenes(request: ScenesRequest, db: Session = Depends(get_db))
 
     scenes = await VideoProcessor.generate_scenes(request.script, request.project_id)
 
-    # Save scenes to database
-    from app.models.project import Scene
     for scene_data in scenes:
         scene = Scene(project_id=request.project_id, **scene_data)
         db.add(scene)
@@ -75,8 +74,6 @@ async def generate_scenes(request: ScenesRequest, db: Session = Depends(get_db))
 @router.post("/generate-scene-video")
 async def generate_scene_video(request: GenerateVideoRequest, db: Session = Depends(get_db)):
     """Generate video for a specific scene."""
-    from app.models.project import Scene
-
     scene = db.query(Scene).filter(Scene.id == request.scene_id).first() if request.scene_id else None
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")

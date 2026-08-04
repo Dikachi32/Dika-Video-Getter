@@ -2,12 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { 
-  LayoutDashboard, 
-  Settings, 
-  Video,
-  Cpu
-} from "lucide-react";
+import { LayoutDashboard, Settings, Video, Cpu } from "lucide-react";
+import { EngineStatusIndicator } from "@/components/dashboard/EngineStatusIndicator";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -54,15 +50,13 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border space-y-3">
         <div className="glass-panel p-3">
           <div className="flex items-center gap-2 mb-2">
-            <Cpu className="w-3 h-3 text-success" />
-            <span className="text-xs font-medium">System Ready</span>
+            <Cpu className="w-3 h-3 text-emerald-400" />
+            <span className="text-xs font-medium">System Status</span>
           </div>
-          <p className="text-[10px] text-muted-foreground">
-            Local Mode Active
-          </p>
+          <EngineStatusIndicator />
         </div>
       </div>
     </aside>
